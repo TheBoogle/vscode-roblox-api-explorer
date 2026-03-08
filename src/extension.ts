@@ -453,6 +453,7 @@ export function activate(context: vscode.ExtensionContext) {
           })
           .catch((e) => {
             console.error(e)
+            input.busy = false
 
             vscode.window.showErrorMessage(
               "Roblox API Explorer: Failed to download new API"
@@ -461,6 +462,11 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (!api) {
           await apiPromise
+
+          if (!api) {
+            input.hide()
+            return
+          }
         }
 
         const state: State =

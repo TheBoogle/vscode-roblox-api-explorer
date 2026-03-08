@@ -2,13 +2,42 @@ import fetch from "node-fetch"
 
 const CURRENT_VERSION_URL =
   "https://clientsettings.roblox.com/v1/client-version/WindowsStudio"
-const API_DUMP_URL =
-  "https://s3.amazonaws.com/setup.roblox.com/{version}-API-Dump.json"
-const API_DOCS_URL =
-  "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/api-docs/en-us.json"
+const API_DUMP_URLS = [
+  "https://s3.amazonaws.com/setup.roblox.com/{version}-API-Dump.json",
+  "https://setup.rbxcdn.com/{version}-API-Dump.json",
+]
+const API_DOCS_URLS = [
+  "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/api-docs/en-us.json",
+  "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/main/api-docs/en-us.json",
+]
 
 async function getJson(url: string) {
-  return fetch(url).then((r) => r.json())
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} while downloading ${url}`)
+  }
+
+  const body = await response.text()
+  try {
+    return JSON.parse(body)
+  } catch (error) {
+    throw new Error(`Invalid JSON from ${url}: ${(error as Error).message}`)
+  }
+}
+
+async function getJsonWithFallback(urls: Array<string>) {
+  const errors: Array<string> = []
+
+  for (const url of urls) {
+    try {
+      return await getJson(url)
+    } catch (error) {
+      errors.push((error as Error).message)
+    }
+  }
+
+  throw new Error(errors.join("; "))
 }
 
 function stripHtml(str?: string) {
@@ -40,10 +69,13 @@ function convertDocsFunction(name: string, entry: any, tag?: string) {
     }
   }
 
+  const params = Array.isArray(entry.params) ? entry.params : []
+  const returns = Array.isArray(entry.returns) ? entry.returns : []
+
   return {
     MemberType: "Function",
     Name: name,
-    Parameters: entry.params.map((param: any) => ({
+    Parameters: params.map((param: any) => ({
       Name: param.name,
       Type: {
         Category: "Unknown",
@@ -53,10 +85,10 @@ function convertDocsFunction(name: string, entry: any, tag?: string) {
     ReturnType: {
       Category: "Unknown",
       Name:
-        entry.returns.length === 1
-          ? entry.returns[0].name
-          : entry.returns.length > 1
-          ? `${entry.returns.length} values`
+        returns.length === 1
+          ? returns[0].name
+          : returns.length > 1
+          ? `${returns.length} values`
           : "undocumented",
     },
     Tags: tag ? [tag] : [],
@@ -215,13 +247,21 @@ function normalizeTags(member: any) {
 async function getApiAsync() {
   const versionInfo = await getJson(CURRENT_VERSION_URL)
   const currentVersionId = versionInfo.clientVersionUpload
-  const dump = await getJson(
-    API_DUMP_URL.replace("{version}", currentVersionId)
+  const dump = await getJsonWithFallback(
+    API_DUMP_URLS.map((url) => url.replace("{version}", currentVersionId))
   )
 
-  const docs = await getJson(API_DOCS_URL)
+  let docs: any = {}
+  try {
+    docs = await getJsonWithFallback(API_DOCS_URLS)
+  } catch (error) {
+    // API browsing can still work without docs; keep descriptions empty.
+    console.warn(`Failed to download API docs: ${(error as Error).message}`)
+  }
 
-  injectDescriptions(dump.Classes, docs)
+  if (Object.keys(docs).length > 0) {
+    injectDescriptions(dump.Classes, docs)
+  }
 
   for (const classEntry of dump.Classes) {
     classEntry.__inheritedMembers = getInheritedMembers(
@@ -257,10 +297,14 @@ async function getApiAsync() {
   ]
 }
 
-let apiPromise: Promise<Array<any>>
+let apiPromise: Promise<Array<any>> | undefined
 export function getApi(): Promise<Array<any>> {
   if (!apiPromise) {
-    apiPromise = getApiAsync()
+    apiPromise = getApiAsync().catch((error) => {
+      // Allow a future command invocation to retry downloads.
+      apiPromise = undefined
+      throw error
+    })
   }
 
   return apiPromise
