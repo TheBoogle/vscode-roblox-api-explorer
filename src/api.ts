@@ -1,4 +1,6 @@
 import fetch from "node-fetch"
+import * as fs from "fs"
+import * as vscode from "vscode"
 
 const CURRENT_VERSION_URL =
   "https://clientsettings.roblox.com/v1/client-version/WindowsStudio"
@@ -12,7 +14,17 @@ const API_DOCS_URLS = [
 ]
 
 async function getJson(url: string) {
-  const response = await fetch(url)
+  const localPath = vscode.workspace
+    .getConfiguration("roblox-api-explorer")
+    .get<string>("localApiDumpPath")
+
+  const response: any =
+    localPath && url.includes("API-Dump.json")
+      ? { ok: true, text: async () => fs.readFileSync(localPath, "utf-8") }
+      : localPath && url.includes("client-version")
+      ? { ok: true, text: async () => JSON.stringify({ clientVersionUpload: "local" }) }
+      : await fetch(url)
+
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} while downloading ${url}`)
